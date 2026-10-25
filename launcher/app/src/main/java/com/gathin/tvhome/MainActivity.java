@@ -87,6 +87,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Date;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -181,6 +182,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView shamsiDate;
     /** lunar_date: the lunisolar date under the date line, and the time zone it is computed for. */
     private TextView lunarDate;
+    /** date_below_clock: one sentence-case date line under the clock ("Sábado, 24 de octubre"); null when off. */
+    private TextView dateLine;
     private boolean lunar;
     private int lunarOffset;
     private TextView stats;
@@ -452,6 +455,38 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // The clock's own white for the date and the line before it, instead of their dimmed whites.
             ((TextView) findViewById(R.id.date)).setTextColor(Color.WHITE);
             findViewById(R.id.clockDivider).setBackgroundColor(Color.WHITE);
+        }
+        if (getResources().getBoolean(R.bool.date_below_clock)) {
+            // The date column leaves the clock's row for a line of its own under it, with no divider. A plain
+            // TextView set on the minute tick, since TextClock cannot capitalise only a sentence's first letter.
+            // Look the date up before its column leaves the window: a detached view is not found by id.
+            TextView dateClock = findViewById(R.id.date);
+            View dateColumn = (View) dateClock.getParent();
+            ((ViewGroup) dateColumn.getParent()).removeView(dateColumn);
+            findViewById(R.id.clockDivider).setVisibility(View.GONE);
+            dateClock.setVisibility(View.GONE);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = (int) (6 * density);
+            ((ViewGroup) clockBlock).addView(dateColumn, lp);
+            dateLine = new TextView(this);
+            dateLine.setGravity(Gravity.LEFT);
+            dateLine.setSingleLine(true);
+            dateLine.setTextSize(18f);
+            dateLine.setLetterSpacing(0.01f);
+            dateLine.setIncludeFontPadding(false);
+            dateLine.setTypeface(dateClock.getTypeface());
+            dateLine.setTextColor(cfg.headerWhite ? 0xE6FFFFFF : 0xA6FFFFFF);
+            dateLine.setPadding((int) (3 * density), 0, 0, 0);
+            ((ViewGroup) dateColumn).addView(dateLine, 1);
+            // The top buttons stay level with the clock, not with the date line now below it.
+            View topButtons = findViewById(R.id.topButtons);
+            RelativeLayout.LayoutParams tlp = (RelativeLayout.LayoutParams) topButtons.getLayoutParams();
+            tlp.removeRule(RelativeLayout.ALIGN_BOTTOM);
+            tlp.addRule(RelativeLayout.ALIGN_TOP, R.id.leftBlock);
+            tlp.bottomMargin = 0;
+            tlp.topMargin = (int) (6 * density);
+            topButtons.setLayoutParams(tlp);
         }
         if (getResources().getBoolean(R.bool.rtl_menu_bar)) {
             // Center Hebrew greetings over the numeric time, independent of a visible AM/PM label.
@@ -2444,6 +2479,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (shamsi) shamsiDate.setText(Shamsi.today(getResources()));
         if (lunar) lunarDate.setText(Lunar.today(getResources(), lunarOffset));
+        if (dateLine != null) {
+            String d = android.text.format.DateFormat.format(
+                    android.text.format.DateFormat.getBestDateTimePattern(locale, "EEEEdMMMM"), new Date()).toString();
+            dateLine.setText(d.isEmpty() ? d : d.substring(0, 1).toUpperCase(locale) + d.substring(1));
+        }
     }
 
     // ---- race-weekend panel (a theme's race_calendar) -----------------------------------------------
@@ -2750,6 +2790,65 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return true;
     }
 
+    /** The system tuner input Live TV opens, or null: a hardware tuner over a software one, digital over analog. */
+    private String pickTuner(List<TvInputInfo> inputs) {
+        String tunerId = null;
+        boolean tunerIsHw = false;
+        boolean tunerIsAnalog = false;
+        for (TvInputInfo info : inputs) {
+            if (info.getType() != TvInputInfo.TYPE_TUNER
+                    || (info.getServiceInfo().applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0
+                    || !(liveTvInputId.isEmpty() || liveTvInputId.equals(info.getId()))) continue;
+            // Prefer a hardware tuner: the framework names those ".../HW<n>". System apps such as
+            // AirPlay also register software inputs of type TUNER and may sort first (seen on TCL G05).
+            // Among tuners of the same kind, skip an analog input when another is present.
+            // MediaTek names them AnalogInputService and TunerInputService; alphabetical order
+            // would pick the analog one, and Live TV then opens a dead ATV source.
+            boolean hw = info.getId().matches(".*/HW\\d+$");
+            boolean analog = info.getId().toLowerCase(Locale.ROOT).contains("analog");
+            boolean better = tunerId == null
+                    || (hw && !tunerIsHw)
+                    || (hw == tunerIsHw && tunerIsAnalog && !analog)
+                    || (hw == tunerIsHw && analog == tunerIsAnalog
+                            && info.getId().compareTo(tunerId) < 0);
+            if (better) {
+                tunerId = info.getId();
+                tunerIsHw = hw;
+                tunerIsAnalog = analog;
+            }
+        }
+        return tunerId;
+    }
+
+    /** Live TV tuned to the TV's tuner through the TV input framework, so it never resumes the last HDMI
+     *  source; the app's plain launch intent when there is no tuner or the app does not take the URI. */
+    Intent tunedLiveTvIntent() {
+        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+        return tunedLiveTvIntent(tim == null ? null : pickTuner(tim.getTvInputList()));
+    }
+
+    private Intent tunedLiveTvIntent(String tunerId) {
+        Intent liveTv = liveTvIntent();
+        if (liveTv != null && tunerId != null) {
+            // Tune that input only when the Live TV package itself handles the URI.
+            // The unrestricted input player also resolves it (that is how HDMI opens), but on the
+            // AIWA AI PONT SA that player stays black, and the Live TV package does not handle the
+            // URI at all, which used to toast "Not available on this TV". Keep the leanback activity
+            // then. Do not drop the package restriction.
+            // An explicit tuner uses its channel collection (e.g. DVB-S rather than DVB-T/C).
+            // Keep the legacy passthrough route for automatic selection: some OEM players need it.
+            // If the configured input is absent, tunerId stays null and the app opens normally.
+            boolean configured = !liveTvInputId.isEmpty();
+            Intent tuned = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(configured ? TvContract.buildChannelsUriForInput(tunerId)
+                                    : TvContract.buildChannelUriForPassthroughInput(tunerId),
+                            configured ? TvContract.Channels.CONTENT_TYPE : TvContract.Channels.CONTENT_ITEM_TYPE)
+                    .setPackage(liveTvPkg);
+            if (tuned.resolveActivity(getPackageManager()) != null) liveTv = tuned;
+        }
+        return liveTv;
+    }
+
     /** The Live TV app's launch intent: its leanback entry point, or the configured action if it has none. */
     private Intent liveTvIntent() {
         if (liveTvPkg.isEmpty()) return null;
@@ -2890,10 +2989,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         boolean sawNonHdmi = false;
         String tunerId = null;
-        boolean tunerIsHw = false;
-        boolean tunerIsAnalog = false;
         if (tim != null) {
             List<TvInputInfo> inputs = new ArrayList<>(tim.getTvInputList());
+            tunerId = pickTuner(inputs);
             // HDMI ports first in port order, then AV and the rest.
             Collections.sort(inputs, (a, b) -> {
                 boolean ha = a.getType() == TvInputInfo.TYPE_HDMI, hb = b.getType() == TvInputInfo.TYPE_HDMI;
@@ -2926,27 +3024,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
             boolean hdmiStateBogus = hdmiPorts > 1 && hdmiConnected == hdmiPorts;
             for (TvInputInfo info : inputs) {
-                if (info.getType() == TvInputInfo.TYPE_TUNER
-                        && (info.getServiceInfo().applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0
-                        && (liveTvInputId.isEmpty() || liveTvInputId.equals(info.getId()))) {
-                    // Prefer a hardware tuner: the framework names those ".../HW<n>". System apps such as
-                    // AirPlay also register software inputs of type TUNER and may sort first (seen on TCL G05).
-                    // Among tuners of the same kind, skip an analog input when another is present.
-                    // MediaTek names them AnalogInputService and TunerInputService; alphabetical order
-                    // would pick the analog one, and Live TV then opens a dead ATV source.
-                    boolean hw = info.getId().matches(".*/HW\\d+$");
-                    boolean analog = info.getId().toLowerCase(Locale.ROOT).contains("analog");
-                    boolean better = tunerId == null
-                            || (hw && !tunerIsHw)
-                            || (hw == tunerIsHw && tunerIsAnalog && !analog)
-                            || (hw == tunerIsHw && analog == tunerIsAnalog
-                                    && info.getId().compareTo(tunerId) < 0);
-                    if (better) {
-                        tunerId = info.getId();
-                        tunerIsHw = hw;
-                        tunerIsAnalog = analog;
-                    }
-                }
                 // Inputs hidden in the TV's Settings > Inputs stay out of the menu too.
                 if (!info.isPassthroughInput() || info.isHidden(this)) continue;
                 // input_sources can leave out ports the board reports but the set does not have ("HW8=-").
@@ -3002,24 +3079,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (rows.getChildCount() == 0 && !sourcePanelService.isEmpty()) {
             addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, this::openSourcePanel);
         }
-        Intent liveTv = liveTvIntent();
-        if (liveTv != null && tunerId != null) {
-            // Tune that input only when the Live TV package itself handles the URI.
-            // The unrestricted input player also resolves it (that is how HDMI opens), but on the
-            // AIWA AI PONT SA that player stays black, and the Live TV package does not handle the
-            // URI at all, which used to toast "Not available on this TV". Keep the leanback activity
-            // then: it is the same path as the Live TV tile. Do not drop the package restriction.
-            // An explicit tuner uses its channel collection (e.g. DVB-S rather than DVB-T/C).
-            // Keep the legacy passthrough route for automatic selection: some OEM players need it.
-            // If the configured input is absent, tunerId stays null and the app opens normally.
-            boolean configured = !liveTvInputId.isEmpty();
-            Intent tuned = new Intent(Intent.ACTION_VIEW)
-                    .setDataAndType(configured ? TvContract.buildChannelsUriForInput(tunerId)
-                                    : TvContract.buildChannelUriForPassthroughInput(tunerId),
-                            configured ? TvContract.Channels.CONTENT_TYPE : TvContract.Channels.CONTENT_ITEM_TYPE)
-                    .setPackage(liveTvPkg);
-            if (tuned.resolveActivity(getPackageManager()) != null) liveTv = tuned;
-        }
+        Intent liveTv = tunedLiveTvIntent(tunerId);
         if (liveTv != null) {
             if (rows.getChildCount() > 0) addSeparator(rows);
             final Intent liveTvIntent = liveTv;

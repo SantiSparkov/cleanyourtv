@@ -210,6 +210,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final boolean focusOvershoot;
     /** Package to the action its tile sends instead of the start screen (config.xml, launch_actions). */
     private final Map<String, String> launchActions;
+    /** The Live TV app (config.xml, live_tv_package): its tile tunes the TV's tuner, like the Inputs menu. */
+    private final String liveTvPackage;
     /** Hold OK opens the activity's tile menu (config.xml, tile_menu); false opens App info, as before. */
     private final boolean tileMenu;
     /** Tile names and bundled banners that replace the app's own (config.xml, app_labels and app_banners). */
@@ -239,6 +241,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.restNameAlpha = cfg.alwaysShowNames ? 0.75f : 0f;
         this.cinematic = cfg.cinematicHome;
         this.launchActions = cfg.launchActions;
+        this.liveTvPackage = cfg.liveTvPackage;
         this.tileMenu = cfg.tileMenu;
         this.appLabels = cfg.appLabels;
         this.appBanners = cfg.appBanners;
@@ -516,6 +519,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // ("Activity not started"), so the screen never opens while the app is up, e.g. MagentaTV's boot-time task.
             Intent byAction = new Intent(action).setPackage(e.pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (ctx.getPackageManager().resolveActivity(byAction, 0) != null) i = byAction;
+        }
+        if (e.pkg.equals(liveTvPackage) && ctx instanceof MainActivity) {
+            Intent tuned = ((MainActivity) ctx).tunedLiveTvIntent();
+            if (tuned != null) i = new Intent(tuned).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         }
         try {
             ctx.startActivity(i);
