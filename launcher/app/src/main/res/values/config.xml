@@ -27,7 +27,16 @@
     <!-- With fewer dock_apps than columns (or a dock app that is not installed), the free dock slots take
          the first grid apps, so the dock never shows a gap. false leaves them empty (#162); a theme can
          set "fill_dock": false. -->
-    <bool name="fill_dock">true</bool>
+    <bool name="fill_dock">false</bool>
+    <!-- Home shows the dock row alone: the apps below it stay hidden until Down moves into them, then fade in
+         (180 ms, 90 ms with reduced_motion) and scroll as a grid; Up from the grid's first row goes back to the dock
+         tile it was left on, and Down to the grid tile. The dock is dock_apps in that order and the grid
+         alphabetical, so reordering and dock editing are left out of the menus. Needs dock_row, not single_row.
+         On in this local Panavox build (LUMEN OS), with fill_dock false so the dock holds exactly dock_apps. -->
+    <bool name="dock_only_home">true</bool>
+    <!-- Every launchable app gets a tile, not only those with a TV (leanback) entry, and the TV's Settings too
+         when it declares no launcher entry. hidden_apps still applies. On in this local Panavox build. -->
+    <bool name="grid_all_apps">true</bool>
 
     <!-- Apps never shown as tiles (e.g. the Live TV app, which the Inputs menu already covers). -->
     <string-array name="hidden_apps">
