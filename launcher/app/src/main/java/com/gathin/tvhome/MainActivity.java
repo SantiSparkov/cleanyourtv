@@ -226,6 +226,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean dockRow;
     /** config single_row: every app in the dock's row, scrolling sideways, no grid below. */
     private boolean singleRow;
+    /** config dock_only_home: Home is the dock alone, the grid below shows only once Down moves into it. */
+    private boolean dockOnlyHome;
+    /** dock_only_home: the grid below the dock is shown (focus is in it). */
+    private boolean gridRevealed;
+    /** dock_only_home: the dock tile and the grid tile focus was last on, so each side is returned to where it was left. */
+    private static int lastDockFocused = -1, lastGridFocused = -1;
     /** The highlight springs past its target (config.xml, focus_overshoot); false goes straight there. */
     private boolean focusOvershoot;
     /** Festive skin from the theme (see Festival); applied while it is active today. */
@@ -299,18 +305,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
         @Override
         public void onLost(@NonNull Network network) {
+            lastTransport = -1;
             handler.post(MainActivity.this::updateWifiLabel);
         }
 
         /** wifi_status_warnings follows validation; signal-strength updates also land here, so skip those. */
         private boolean lastValidated;
+        /** The default network's link (Wi-Fi, Ethernet), so the pill's icon follows a change of cable or Wi-Fi. */
+        private int lastTransport = -1;
 
         @Override
         public void onCapabilitiesChanged(@NonNull Network network, @NonNull NetworkCapabilities caps) {
+            int transport = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ? NetworkCapabilities.TRANSPORT_ETHERNET
+                    : caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? NetworkCapabilities.TRANSPORT_WIFI : -1;
             boolean validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
-            if (validated == lastValidated) return;
+            boolean linkChanged = transport != lastTransport;
+            lastTransport = transport;
+            if (validated == lastValidated && !linkChanged) return;
             lastValidated = validated;
-            if (wifiNoInternetTint != null) handler.post(MainActivity.this::updateWifiLabel);
+            if (linkChanged || wifiNoInternetTint != null) handler.post(MainActivity.this::updateWifiLabel);
         }
     };
     /** Shows the Inputs pill once the TV registers an input: at boot HDMI inputs can appear after Home is shown. */
@@ -393,6 +406,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         reducedMotion = cfg.reducedMotion;
         dockRow = cfg.dockRow;
         singleRow = cfg.singleRow;
+        dockOnlyHome = getResources().getBoolean(R.bool.dock_only_home) && dockRow && !singleRow;
         focusOvershoot = cfg.focusOvershoot;
         festival = cfg.festival;
         festive = festival.active(LocalDate.now());
@@ -792,7 +806,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 // Back to the dock tile Up came from, not wherever the focus finder lands.
-                focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
+                focusTile(singleRow ? lastFocused : dockOnlyHome && lastDockFocused >= 0 ? lastDockFocused : lastFocused % COLUMNS);
                 return true;
             }
             int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
@@ -822,6 +836,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             boolean onTile = newF != null && newF.getId() == R.id.card;
             if (!onTile) hideGlass();
+            // dock_only_home: the top bar (or anything but a tile) leaves Home as the dock alone.
+            if (!onTile && newF != null) revealGrid(false);
         });
 
         packageFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -917,6 +933,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.scrollToPosition(0);
         lastFocused = 0;
         lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
+        lastDockFocused = 0;
+        revealGrid(false);
         if (stopped) {
             tileRefresh.onHomeAgain();
         } else {
@@ -1478,7 +1496,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return pos != RecyclerView.NO_POSITION && movingKey.equals(adapter.keyAt(pos)) ? 1f : 0.45f;
         }
         if (dockEditSlot >= 0 && pos >= 0 && pos < COLUMNS && pos != dockEditSlot) return 0.45f;
+        if (dockOnlyHome && pos >= 0) return DockOnlyHome.alpha(pos, COLUMNS, gridRevealed || reordering);
         return 1f;
+    }
+
+    /**
+     * dock_only_home: fades the tiles below the dock in (Down into the grid) or out (back to the dock or the top
+     * bar). A new call takes over from a fade still running, so a quick Down and Up never waits for the first.
+     */
+    private void revealGrid(boolean show) {
+        if (!dockOnlyHome || gridRevealed == show) return;
+        gridRevealed = show;
+        int ms = !animations ? 0 : reducedMotion ? Motion.REDUCED_MS : show ? DockOnlyHome.REVEAL_MS : DockOnlyHome.HIDE_MS;
+        for (int i = 0; i < grid.getChildCount(); i++) {
+            View item = grid.getChildAt(i);
+            int pos = grid.getChildAdapterPosition(item);
+            if (pos < COLUMNS) continue;   // the dock (and a footer still being bound) stays as it is
+            float to = tileAlpha(pos);
+            item.animate().cancel();
+            if (ms == 0) item.setAlpha(to);
+            else item.animate().alpha(to).setDuration(ms).start();
+        }
     }
 
     /** Ends the mode and saves the order if it changed since the mode started. */
@@ -1618,6 +1656,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public void onTileFocused(int position, View card) {
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
+        if (dockOnlyHome) {
+            if (position < COLUMNS) lastDockFocused = position;
+            else lastGridFocused = position;
+            revealGrid(position >= COLUMNS);
+        }
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
         // would be sized to 2*pad. Run again once the tile is laid out.
         if (card.getWidth() == 0) {
@@ -2258,7 +2301,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return GridNavigation.atHorizontalEdge(position, rowCount, COLUMNS,
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+        if (dockOnlyHome && keyCode == KeyEvent.KEYCODE_DPAD_UP && position >= COLUMNS) {
+            target = DockOnlyHome.up(position, lastDockFocused, COLUMNS, adapter.dockFilled());
+        } else if (dockOnlyHome && position < COLUMNS && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            target = DockOnlyHome.down(position, lastGridFocused, COLUMNS, count);
+            if (target < 0) return true;                   // nothing below the dock
+        } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
             target = position - COLUMNS;
         } else {
@@ -2587,6 +2635,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
             if (!online) {
                 text = getString(R.string.offline);
+                icon = R.drawable.ic_wifi_off;
                 vpn = false;
             } else if (ethernet) {
                 text = getString(R.string.ethernet);
@@ -3206,8 +3255,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             });
         }
         if (moduleCards) addSettingsMenuRow(rows, popup, R.string.module_cards, this::showModuleCards);
-        if (dockRow) addSettingsMenuRow(rows, popup, R.string.dock_edit, this::startDockEdit);
-        addSettingsMenuRow(rows, popup, R.string.reorder, this::toggleReorder);
+        // dock_only_home keeps the dock as dock_apps and the grid alphabetical, so a saved order would never show.
+        if (dockRow && !dockOnlyHome) addSettingsMenuRow(rows, popup, R.string.dock_edit, this::startDockEdit);
+        if (!dockOnlyHome) addSettingsMenuRow(rows, popup, R.string.reorder, this::toggleReorder);
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
         // Hebrew puts Settings at the left of the header: grow the menu inward from it.
@@ -3231,12 +3281,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
-        if (dockRow && position < adapter.movableCount()) {
+        if (dockRow && !dockOnlyHome && position < adapter.movableCount()) {
             boolean inDock = position < COLUMNS;
             addSettingsMenuRow(rows, popup, inDock ? R.string.tile_replace_in_dock : R.string.tile_add_to_dock,
                     () -> startDockEditFor(key, inDock));
         }
-        if (position < adapter.movableCount()) addSettingsMenuRow(rows, popup, R.string.tile_move, () -> {
+        if (!dockOnlyHome && position < adapter.movableCount()) addSettingsMenuRow(rows, popup, R.string.tile_move, () -> {
             if (!beginReorder()) return;
             int at = adapter.positionOf(key);   // beginReorder can rebuild the tiles
             if (at < 0) return;
@@ -3251,6 +3301,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Some firmware has no App info page at all; a row that only toasts "can't open" helps nobody.
         Intent info = SystemSettings.appInfo(this, pkg);
         if (info != null) addSettingsMenuRow(rows, popup, R.string.library_app_info, () -> open(info));
+        if (rows.getChildCount() == 0) return;   // dock_only_home leaves out Move and the dock rows
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
         // Dock tiles sit near the bottom of the screen: open the menu above the tile when it would not fit below.

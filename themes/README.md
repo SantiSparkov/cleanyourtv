@@ -82,6 +82,7 @@ A new key needs one there in the same pull request.
 | `greeting_name` | string | A name after the greeting, e.g. `"Mr. Trịnh"` for GOOD MORNING, MR. TRỊNH; empty for the greeting alone |
 | `show_greeting` | bool | The greeting above the clock (`true` by default); `false` hides it |
 | `header_white` | bool | The date and the line between the clock and the date in the clock's full white instead of dimmed (`false` by default) |
+| `date_below_clock` | bool, `config.xml` only | The date as one sentence-case line under the clock ("Sábado, 24 de octubre") instead of beside it after a divider. On in this Panavox build's `config.xml` |
 | `module_cards` | bool | Look for module cards and ask about them (`true`); `false` turns the feature off |
 | `reduced_motion` | bool | Calmer motion for weak GPUs: the highlight slides without bouncing and settles within 5 frames, every animation lasts 90 ms or less, names, the top shelf, the glow and the highlight appear instead of fading, and there is no tile entrance (`false` by default) |
 | `boot_to_live_tv` | bool | Open the Live TV app (`live_tv_package`) on the first Home after the TV starts, once per boot |
@@ -132,6 +133,8 @@ A new key needs one there in the same pull request.
 | `dock_even_padding` | bool | The dock band's padding equals the gap between its tiles on all four sides, as far as the grid's edges leave room (`false` by default) |
 | `dock_glass` | bool | The dock band as light frosted glass like the top bar's pills (`false` by default); suits `sky_intensity` or a wallpaper, where the solid band reads as a dark slab |
 | `single_row` | bool | Every app in the dock's row, the dock apps first, scrolling sideways; no grid below (`false` by default; needs `dock_row`) |
+| `dock_only_home` | bool, `config.xml` only | Home shows the dock row alone: the apps below it stay hidden until Down moves into them, then fade in and scroll as a grid; Up from the grid's first row goes back to the dock tile it was left on, Down to the grid tile. The dock is `dock_apps` in order and the grid alphabetical, so reordering and dock editing leave the menus. Needs `dock_row`, not `single_row`; on in this Panavox build's `config.xml` |
+| `grid_all_apps` | bool, `config.xml` only | Every launchable app gets a tile, not only those with a TV (leanback) entry, plus the TV's Settings when it declares no launcher entry; `hidden_apps` still applies. On in this Panavox build's `config.xml` |
 | `dock_band_all` | bool | With `single_row`, the band runs behind every app in the row, not only the dock apps (`false` by default) |
 | `ambient_glow` | bool | The glow behind the dock in the focused app's colour (`true` by default); `false` keeps only `background_color` or the wallpaper, e.g. for a calm photo background |
 | `app_glow` | bool | The focus highlight glows in the focused app's colour on every tile, as `cinematic_home` does for the dock (`false` by default) |

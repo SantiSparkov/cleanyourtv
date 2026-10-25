@@ -218,6 +218,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final Map<String, String> appLabels, appBanners;
     /** Every app tile is its icon on a card tinted from that icon, never its banner (config.xml, uniform_tiles). */
     private final boolean uniformTiles;
+    /** config.xml dock_only_home: the dock is dock_apps in its order and the grid alphabetical, whatever was saved. */
+    private final boolean dockOnlyHome;
+    /** config.xml grid_all_apps: every launchable app gets a tile, not only the TV ones, and the TV's Settings too. */
+    private final boolean allApps;
     private final List<Entry> items = new ArrayList<>();
 
     AppAdapter(Context ctx, TileListener listener, int dockSize, Config cfg) {
@@ -246,6 +250,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.appLabels = cfg.appLabels;
         this.appBanners = cfg.appBanners;
         this.uniformTiles = cfg.uniformTiles;
+        this.dockOnlyHome = ctx.getResources().getBoolean(R.bool.dock_only_home) && cfg.dockRow && !cfg.singleRow;
+        this.allApps = ctx.getResources().getBoolean(R.bool.grid_all_apps);
         // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
         // its view being rebound to whatever app now sits in that slot.
         setHasStableIds(true);
@@ -267,12 +273,22 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Set<String> added = new HashSet<>(LibraryApps.load(ctx));
         added.addAll(libraryPreload);
         Set<String> removed = LibraryApps.loadRemoved(ctx);
-        if (!added.isEmpty()) {
-            Set<String> seen = new HashSet<>(tvPackages);
+        // grid_all_apps: phone-style apps (no leanback entry) count as TV apps, so each gets a tile.
+        Set<String> listed = new HashSet<>(tvPackages);
+        if (!added.isEmpty() || allApps) {
             for (ResolveInfo ri : pm.queryIntentActivities(
                     new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)) {
-                if (ri.activityInfo != null && added.contains(ri.activityInfo.packageName)
-                        && seen.add(ri.activityInfo.packageName)) found.add(ri);
+                if (ri.activityInfo != null && (allApps || added.contains(ri.activityInfo.packageName))
+                        && listed.add(ri.activityInfo.packageName)) found.add(ri);
+            }
+        }
+        if (allApps) {
+            // TV Settings declares no launcher entry on most sets; it still belongs in a list of every app.
+            ResolveInfo settings = pm.resolveActivity(new Intent(Settings.ACTION_SETTINGS), 0);
+            // Two handlers resolve to the system chooser ("android"), which is no app to list.
+            if (settings != null && settings.activityInfo != null && !"android".equals(settings.activityInfo.packageName)
+                    && listed.add(settings.activityInfo.packageName)) {
+                found.add(settings);
             }
         }
         Map<String, Cards.Card> cardByPkg = new HashMap<>();
@@ -285,7 +301,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
             if (pkg.equals(ctx.getPackageName()) || !ri.activityInfo.exported
-                    || !LibraryApps.visible(tvPackages.contains(pkg), hidden.contains(pkg), added.contains(pkg), removed.contains(pkg))) continue;
+                    || !LibraryApps.visible(allApps || tvPackages.contains(pkg), hidden.contains(pkg), added.contains(pkg), removed.contains(pkg))) continue;
             ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
             Cards.Card card = cardByPkg.get(pkg);
             if (card != null && !card.component.equals(component)) continue;   // the card stands in for this tile
@@ -558,6 +574,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Uses this saved order and dock size from the next reload() (Order.ranks, Order.docked). */
     void setSavedOrder(Map<String, Integer> ranks, int docked) {
+        if (dockOnlyHome) return;   // the dock is dock_apps and the grid alphabetical, always
         savedRanks = ranks;
         savedDocked = docked;
     }
